@@ -2,6 +2,7 @@ package libv2ray
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -62,11 +63,28 @@ func (x *CoreController) MeasureDelay(url string) (int64, error) {
 	return measureInstDelay(ctx, x.coreInstance, url)
 }
 
+// OutboundDelayResult holds the delay measurement and egress IP info.
+type OutboundDelayResult struct {
+	Delay   int64  `json:"delay"`
+	Country string `json:"country"`
+	IP      string `json:"ip"`
+}
+
 // MeasureOutboundDelay measures the outbound delay for a given configuration and URL
 func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error) {
+	result, err := MeasureOutboundDelayWithInfo(ConfigureFileContent, url, "")
+	if err != nil {
+		return -1, err
+	}
+	return result.Delay, nil
+}
+
+// MeasureOutboundDelayWithInfo measures outbound delay AND fetches egress IP info
+// through the same core.Dial path. Returns JSON with delay, country, and IP.
+func MeasureOutboundDelayWithInfo(ConfigureFileContent string, url string, ipApiUrl string) (*OutboundDelayResult, error) {
 	config, err := coreserial.LoadJSONConfig(strings.NewReader(ConfigureFileContent))
 	if err != nil {
-		return -1, fmt.Errorf("config load error: %w", err)
+		return nil, fmt.Errorf("config load error: %w", err)
 	}
 
 	config.Inbound = nil
@@ -82,14 +100,72 @@ func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error
 
 	inst, err := core.New(config)
 	if err != nil {
-		return -1, fmt.Errorf("instance creation failed: %w", err)
+		return nil, fmt.Errorf("instance creation failed: %w", err)
 	}
 
 	if err := inst.Start(); err != nil {
-		return -1, fmt.Errorf("startup failed: %w", err)
+		return nil, fmt.Errorf("startup failed: %w", err)
 	}
 	defer inst.Close()
-	return measureInstDelay(context.Background(), inst, url)
+
+	// Measure delay
+	delay, _ := measureInstDelay(context.Background(), inst, url)
+
+	// Fetch egress IP info through the same dial path
+	country, ip := fetchEgressInfo(context.Background(), inst, ipApiUrl)
+
+	return &OutboundDelayResult{
+		Delay:   delay,
+		Country: country,
+		IP:      ip,
+	}, nil
+}
+
+// fetchEgressInfo fetches egress IP info through the core.Dial path.
+func fetchEgressInfo(ctx context.Context, inst *core.Instance, ipApiUrl string) (string, string) {
+	if ipApiUrl == "" {
+		ipApiUrl = "https://ipinfo.io/json"
+	}
+
+	tr := &http.Transport{
+		TLSHandshakeTimeout: 6 * time.Second,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			dest, err := corenet.ParseDestination(fmt.Sprintf("%s:%s", network, addr))
+			if err != nil {
+				return nil, err
+			}
+			return core.Dial(ctx, inst, dest)
+		},
+	}
+	defer tr.CloseIdleConnections()
+
+	client := &http.Client{Transport: tr, Timeout: 10 * time.Second}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", ipApiUrl, nil)
+	if err != nil {
+		return "", ""
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", ""
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", ""
+	}
+
+	var ipInfo struct {
+		Country string `json:"country"`
+		IP      string `json:"ip"`
+	}
+	if err := json.Unmarshal(body, &ipInfo); err != nil {
+		return "", ""
+	}
+
+	return ipInfo.Country, ipInfo.IP
 }
 
 // measureInstDelay measures the delay for an instance to a given URL
@@ -125,7 +201,10 @@ func measureInstDelay(ctx context.Context, inst *core.Instance, url string) (int
 
 	defer tr.CloseIdleConnections()
 
-	const attempts = 2
+	// A single attempt per measurement: a second sample doubled every result's
+	// wall time for a marginal min-vs-single difference, and batch "ping all"
+	// runs paid that on every profile.
+	const attempts = 1
 	for i := 0; i < attempts; i++ {
 		select {
 		case <-ctx.Done():
