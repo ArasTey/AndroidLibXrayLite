@@ -195,16 +195,33 @@ func measureInstDelay(ctx context.Context, inst *core.Instance, url string) (int
 		Timeout:   12 * time.Second,
 	}
 
+	defer tr.CloseIdleConnections()
+
+	// Warm, unmeasured request. The delay previously reported was the whole
+	// cold HTTPS request — DNS + TCP + tunnel handshake + TLS + the GET
+	// itself, about four RTTs, so a ~100 ms link displayed ~500 ms. The
+	// warmup completes DNS, the tunnel handshake and TLS, and keep-alives
+	// retain the connection, so the request that follows rides an
+	// established path and its round trip is what gets timed — one RTT,
+	// which is what a "ping" promises.
+	if warm, err := http.NewRequestWithContext(ctx, "GET", url, nil); err == nil {
+		if resp, err := client.Do(warm); err == nil {
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+		}
+	}
+
 	var minDuration int64 = -1
 	success := false
 	var lastErr error
 
-	defer tr.CloseIdleConnections()
-
-	// A single attempt per measurement: a second sample doubled every result's
-	// wall time for a marginal min-vs-single difference, and batch "ping all"
-	// runs paid that on every profile.
-	const attempts = 1
+	// Two attempts, min kept. The first attempt pays the cold path — wireguard
+	// handshake, TCP, TLS — roughly 4-5× the server's real RTT. The second rides
+	// the warm keep-alive connection and lands ≈ one real RTT. A single attempt
+	// would therefore always report the cold number (a plain-100ms server reads
+	// ~500ms), which is how the app showed 5× the real delay until this was
+	// restored to the 1.7.x behavior.
+	const attempts = 2
 	for i := 0; i < attempts; i++ {
 		select {
 		case <-ctx.Done():
