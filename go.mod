@@ -3,14 +3,13 @@ module github.com/2dust/AndroidLibXrayLite
 go 1.27
 
 require (
-	github.com/amnezia-vpn/amneziawg-go/v3 v3.1.20260828
 	github.com/apernet/quic-go v0.61.1-0.20260806010916-184d081eef3e
 	github.com/xtls/xray-core v1.260327.1-0.20260728075948-5ca6f4b7d4dc
 	golang.org/x/mobile v0.0.0-20260709172247-6129f5bee9d5
-	golang.org/x/sys v0.48.0
 )
 
 require (
+	github.com/amnezia-vpn/amneziawg-go/v3 v3.1.20260828 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/cloudflare/circl v1.6.5 // indirect
 	github.com/ghodss/yaml v1.0.1-0.20220118164431-d8423dcdf344 // indirect
@@ -51,6 +50,7 @@ require (
 	golang.org/x/exp v0.0.0-20240506185415-9bf2ced13842 // indirect
 	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/sync v0.23.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
